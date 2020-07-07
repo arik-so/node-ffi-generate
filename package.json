@@ -2,16 +2,32 @@
   "name": "ffi-generate",
   "version": "0.0.7",
   "description": "Generate FFI Bindings from header file",
-  "keywords": ["libclang", "ffi", "bindings"],
+  "keywords": [
+    "libclang",
+    "ffi",
+    "bindings"
+  ],
   "author": "Timothy J Fontaine <tjfontaine@gmail.com>",
   "main": "lib/generateffi.js",
   "bin": {
     "ffi-generate": "bin/ffi-generate.js"
+  },
+  "scripts": {
+    "tsc": "./node_modules/typescript/bin/tsc --build tsconfig.json",
+    "prepublish": "npm run tsc"
   },
   "dependencies": {
     "hogan.js": ">= 2.0.0",
     "js-beautify": "",
     "libclang": ">= 0.0.10",
     "optimist": ""
+  },
+  "devDependencies": {
+    "@types/chai": "^4.2.11",
+    "@types/mocha": "^7.0.2",
+    "@types/node": "^14.0.18",
+    "chai": "^4.2.0",
+    "mocha": "^8.0.1",
+    "typescript": "^3.9.6"
   }
 }
