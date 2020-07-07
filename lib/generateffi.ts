@@ -91,7 +91,7 @@ exports.generate = function (opts) {
   }
 
   /* For a given Typedef try and iterate fields and define an FFI struct */
-  var defineType = function (type, unionName) {
+  var defineType = function (type, unionName?) {
     /* We've previously defined this type
      * TODO XXX FIXME? wanted to use type.usr since it's relevant per translation unit
      * but using just the regular spelling makes things nicer for accessibility
@@ -255,7 +255,7 @@ exports.generate = function (opts) {
   };
 
   var defineOpaque = function (canonical) {
-    ret = new WrapType(canonical);
+    var ret = new WrapType(canonical);
     ret.opaque = true;
     if (!structs[ret.name]) {
       toRender.types.push({
