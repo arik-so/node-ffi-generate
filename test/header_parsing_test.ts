@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import chai = require('chai');
 
 // set env variable prior to importing generateffi
@@ -34,7 +35,8 @@ describe('Header Parsing Test', () => {
 		//
 		// console.log('DYLD_LIBRARY_PATH', process.env.DYLD_LIBRARY_PATH);
 
-		const filename = `${__dirname}/resources/joint_headers.h`;
+		// const filename = `${__dirname}/resources/joint_headers.h`;
+		const filename = `${__dirname}/resources/isolated_headers.h`;
 		const library = `/Users/arik/Developer/rust-swift-ffi/rust-lightning/target/release/liblightning`;
 
 		const ret = generate({
@@ -44,9 +46,10 @@ describe('Header Parsing Test', () => {
 			// prefix: argv.p,
 			// compiler_args: argv._,
 			// strict_type: argv.s,
-			// single_file: argv.x,
+			single_file: true,
 		});
-		console.log('here');
+
+		fs.writeFileSync(`${__dirname}/out/header_parsing_test.js`, ret.serialized);
 
 	})
 

@@ -1,15 +1,15 @@
 var assert = require('assert'),
-    fs = require('fs'),
-    hogan = require('hogan.js'),
-    path = require('path'),
-    util = require('util');
+	fs = require('fs'),
+	hogan = require('hogan.js'),
+	path = require('path'),
+	util = require('util');
 
 var libclang = require('libclang');
 
 var Cursor = libclang.Cursor,
-    Index = libclang.Index,
-    TranslationUnit = libclang.TranslationUnit,
-    Type = libclang.Type;
+	Index = libclang.Index,
+	TranslationUnit = libclang.TranslationUnit,
+	Type = libclang.Type;
 
 /*
  * Accepts an object as defined below
@@ -29,491 +29,516 @@ var Cursor = libclang.Cursor,
  * serialized -- string representation of the types and module [eval or save]
  */
 exports.generate = function (opts) {
-  var fname = path.normalize(opts.filename);
-  var library = opts.library;
-  var module = opts.module || opts.library;
-  var prefix = opts.prefix || [];
-  var includes = opts.includes || [];
-  var compiler_args = [];
-  var single_file = opts.single_file || false;
-  var strict_type = opts.strict_type || false;
+	var fname = path.normalize(opts.filename);
+	var library = opts.library;
+	var module = opts.module || opts.library;
+	var prefix = opts.prefix || [];
+	var includes = opts.includes || [];
+	var compiler_args = [];
+	var single_file = opts.single_file || false;
+	var strict_type = opts.strict_type || false;
 
-  var generateType = opts.generateType || 'ffi';
+	var generateType = opts.generateType || 'ffi';
 
-  var ffiMapType = require('./' + generateType + '-type-map');
+	var ffiMapType = require('./' + generateType + '-type-map');
 
-  var templateDir = path.join(__dirname, '..', 'templates', generateType);
-  var ArrayTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'array.mustache'), 'utf8'));
-  var FuncPtrTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'funcptr.mustache'), 'utf8'));
-  var OpaqueTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'opaque.mustache'), 'utf8'));
-  var StructTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'struct.mustache'), 'utf8'));
-  var UnionTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'union.mustache'), 'utf8'));
-  var TypeTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, generateType + '.mustache'), 'utf8'));
+	var templateDir = path.join(__dirname, '..', 'templates', generateType);
+	var ArrayTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'array.mustache'), 'utf8'));
+	var FuncPtrTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'funcptr.mustache'), 'utf8'));
+	var OpaqueTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'opaque.mustache'), 'utf8'));
+	var StructTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'struct.mustache'), 'utf8'));
+	var UnionTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'union.mustache'), 'utf8'));
+	var TypeTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, generateType + '.mustache'), 'utf8'));
 
-  if (opts.compiler_args) {
-    compiler_args = opts.compiler_args.slice(0);
-  }
+	const things = Type;
+	const cursorTypes = Cursor;
+	console.dir(things);
+	console.dir(cursorTypes);
 
-  if (!(prefix instanceof Array)) {
-    prefix = [prefix];
-  }
+	if (opts.compiler_args) {
+		compiler_args = opts.compiler_args.slice(0);
+	}
 
-  var idx = new Index(true, true);
-  var tu;
+	if (!(prefix instanceof Array)) {
+		prefix = [prefix];
+	}
 
-  includes.forEach(function (include) { compiler_args.push('-I'+include); });
-  tu = TranslationUnit.fromSource(idx, fname, compiler_args);
+	var idx = new Index(true, true);
+	var tu;
 
-  var curs = tu.cursor;
+	includes.forEach(function (include) {
+		compiler_args.push('-I' + include);
+	});
+	tu = TranslationUnit.fromSource(idx, fname, compiler_args);
 
-  var unmapped = [];
-  var structs = {};
-  var enums = {};
+	var curs = tu.cursor;
 
-  var toRender = {
-    enums: [],
-    types: [],
-    functions: [],
-    module: module,
-    library: library,
-  };
+	var unmapped = [];
+	var structs = {};
+	var enums = {};
 
-  var WrapType = function (name) {
-    this.name = name;
-    this.type = name;
-    this.abort = false;
-    this.opaque = false;
-    this.arrSize = false;
-    this.return_type = undefined;
-    this.args = [];
-    this.elements = [];
-    this.unionCount = 0;
-  }
+	var toRender = {
+		enums: [],
+		types: [],
+		functions: [],
+		module: module,
+		library: library
+	};
 
-  /* For a given Typedef try and iterate fields and define an FFI struct */
-  var defineType = function (type, unionName?) {
-    /* We've previously defined this type
-     * TODO XXX FIXME? wanted to use type.usr since it's relevant per translation unit
-     * but using just the regular spelling makes things nicer for accessibility
-     */
-    var name = type.spelling, wrap;
+	var WrapType = function (name) {
+		this.name = name;
+		this.type = name;
+		this.abort = false;
+		this.opaque = false;
+		this.arrSize = false;
+		this.return_type = undefined;
+		this.args = [];
+		this.elements = [];
+		this.unionCount = 0;
+	}
 
-    if (!name && unionName)
-      name = unionName;
+	/* For a given Typedef try and iterate fields and define an FFI struct */
+	const defineType = function (type, unionName?) {
+		/* We've previously defined this type
+		 * TODO XXX FIXME? wanted to use type.usr since it's relevant per translation unit
+		 * but using just the regular spelling makes things nicer for accessibility
+		 */
+		var name = type.spelling, wrap;
 
-    if (!name && type.usr) {
-      // TODO XXX FIXME we probably have a record here and are hacking our way
-      // to find out its name
-      name = type.usr.split('@')[2];
-    }
+		if (!name && unionName)
+			name = unionName;
 
-    if (!name) {
-      //console.error(name, !name, type.spelling, type.usr);
-      return undefined;
-    }
+		if (!name && type.usr) {
+			// TODO XXX FIXME we probably have a record here and are hacking our way
+			// to find out its name
+			name = type.usr.split('@')[2];
+		}
 
-
-    wrap = structs[name];
-
-    if (wrap) {
-      return wrap;
-    }
-
-    wrap = new WrapType(name);
-
-    var first = true;
-    type.visitChildren(function(parent) {
-        var ret, t, tname;
-        /* First item in the cursor is the one we started with?
-         * immediately move beyond it
-         */
-        //console.error('visiting', this.kind, this.spelling, parent.kind, parent.spelling);
-
-        if (first && this.kind == Cursor.StructDecl) {
-          first = false;
-          return Cursor.Recurse;
-        }
-
-        if (this.kind == Cursor.UnionDecl) {
-          var un = this.type.declaration.spelling || 'union' + wrap.unionCount++;
-          //console.error('UnionDecl', un, this.kind);
-          var union = defineType(this.type.declaration, un);
-          if (union) {
-            union.kind = 'union';
-            wrap.elements.push(union);
-          } else
-            //console.error('failed to wrap union');
-          return Cursor.Continue;
-        }
-        /* TODO XXX FIXME? 
-         * If the current position of the cursor has an empty string, we're
-         * probably still at the start of the struct/typedef
-         */
-        if (this.spelling) {
-          /* Potentially some recursion here -- if this type depends on a type
-           * a type we have yet to define this call should recurse until we're
-           * in a sane state -- undefined if we can't map the type.
-           */
-          if (this.kind == Cursor.TypeRef) {
-            t = mapType(this.referenced.type, this.referenced.spelling);
-            tname = this.referenced.spelling;
-          } else if (this.kind == Cursor.UnexposedDecl) {
-            t = mapType(this.type, this.type.spelling);
-            tname = this.type.spelling;
-          } else if (this.kind == Cursor.FieldDecl && this.type.kind == Type.Unexposed) {
-            //console.error('FieldDecl', this.type.kind, this.type.spelling);
-            t = wrap.elements[wrap.elements.length - 1];
-            /* This may not be entirely correct, we're assuming that because we
-             * already have elements defined that we're at the name of it,
-             * consider `union { int foo; } myUnion;` but it's also possible
-             * we are at an actual definition and we should be defining this type
-             *
-             * TODO -- man I need tests.
-             */
-            if (t) {
-              t.name = this.spelling;
-              return Cursor.Continue;
-            } else {
-              t = defineType(this.type.declaration);
-              tname = this.spelling;
-            }
-          } else {
-            t = mapType(this.type, this.spelling);
-            tname = this.spelling;
-          }
-          if (!t) {
-            /* This type has an element we don't know how to map yet, abort */
-            wrap.abort = {
-              name: tname,
-            };
-            //console.error('breaking because of unmapped type', tname, this.kind);
-            ret = Cursor.Break;
-          } else {
-            /* Add the field for the struct */
-            wrap.elements.push({
-              name: tname,
-              type: t.kind === 'struct' ? t.name : t.type || t.name,
-            });
-            ret = Cursor.Continue;
-          }
-        } else if (this.kind === Cursor.UnexposedDecl || this.kind === Cursor.UnexposedAttr) {
-          //console.error('unexposed decl', this.type.spelling);
-          ret = Cursor.Continue;
-        } else if (this.type.kind == Cursor.BlockExpr) {
-          //console.error('block expr');
-          ret = Cursor.Continue;
-        } else {
-          //console.error('breaking because of unknown kind', this.type.kind, this.kind);
-          wrap.abort = {
-            kind: this.type.kind,
-          };
-          ret = Cursor.Break;
-        }
-        first = false;
-        return ret;
-    });
-
-    /* types should probably contain at least one type, and don't claim to support partially defined types */
-    if (!wrap.abort && wrap.elements.length > 0) {
-      if (!unionName) {
-        wrap.type = StructTmpl.render(wrap).trim();
-        wrap.kind = 'struct';
-        toRender.types.push(wrap);
-        structs[wrap.name] = wrap;
-      } else {
-        wrap.type = UnionTmpl.render(wrap).trim();
-        wrap.kind = 'union';
-      }
-      return wrap;
-    } else {
-      //console.error(wrap);
-      return undefined;
-    }
-  };
-
-  var mapEnum = function (type, ret) {
-    var def;
-    type.visitChildren(function (parent) {
-      var val;
-
-      if (ret.name[0] === 'u') {
-        val = this.enumUValue;
-      } else {
-        val = this.enumValue;
-      }
-
-      def = enums[parent.spelling];
-      if (!def) {
-        def = enums[parent.spelling] = {};
-      }
-
-      def[this.spelling] = val;
-
-      return Cursor.Continue;
-    });
-    //console.error(def);
-  };
-
-  var defineOpaque = function (canonical) {
-    var ret = new WrapType(canonical);
-    ret.opaque = true;
-    if (!structs[ret.name]) {
-      toRender.types.push({
-        name: ret.name,
-        type: OpaqueTmpl.render(ret).trim(),
-      });
-      structs[ret.name] = ret;
-    }
-    return ret;
-  };
-
-  var defineFunction = function (name, type) {
-    //console.error('defining function', name);
-
-    var ret = new WrapType(name);
-
-    var result = mapType(type.result, name);
-
-    if (!result) {
-      //console.error('could not map return type', type.result.spelling);
-      ret.abort = {
-        name: name,
-        arg: type.result.spelling,
-        position: -1,
-        kind: type.declaration.spelling,
-      };
-      return ret;
-    }
-
-    ret.result = result.name;
-
-    var i, arg, a, b;
-    for (i = 0; i < type.argTypes; i++) {
-      a = type.getArg(i);
-
-      //console.error('mapping argument', i);
-      arg = mapType(a, name + '-arg' + i);
-      if (!arg) {
-        ret.abort = {
-          name: name,
-          displayname: a.declaration.displayname,
-          arg: a.spelling,
-          position: i,
-        };
-        return ret;
-      }
-      ret.args.push(arg);
-    }
-
-    return ret;
-  };
-
-  /*
-    Turn the libclang type into ffi type
-    TODO XXX FIXME -- Still missing array support (but node-ffi is too)
-  */
-  var mapType = function (type, fieldname) {
-    var ret;
-    //console.error('mapType', type.spelling, type.kind);
-
-    if (type.kind === Type.Pointer && type.pointeeType.kind === Type.Char_S) {
-      ret = new WrapType(ffiMapType.CString);
-    } else {
-      switch (type.kind)
-      {
-        case Type.Typedef:
-          /* Handle the case where someone has simply redefined an existing type */
-          var canonical = type.canonical;
-
-          if (canonical.kind == Type.Pointer && canonical.declaration.kind == Cursor.NoDeclFound &&
-              type.declaration.spelling) {
-            if (canonical.pointeeType.kind == Type.FunctionProto) {
-              ret = structs[type.declaration.spelling];
-              if (!ret) {
-                ret = defineFunction(type.declaration.spelling, canonical.pointeeType);
-                if (!ret.abort) {
-                  toRender.types.push({
-                    name: ret.name,
-                    type: FuncPtrTmpl.render(ret).trim(),
-                  });
-                  structs[type.declaration.spelling] = ret;
-                } else {
-                  unmapped.push(ret.abort);
-                  return undefined;
-                }
-              }
-              return ret;
-            } else {
-              ret = defineType(canonical.pointeeType.declaration);
-              if (ret)
-                return new WrapType(ret.name + 'Ptr');
-              else
-                return defineOpaque(type.declaration.spelling);
-            }
-          }
-          canonical = mapType(canonical, fieldname);
-
-          if (canonical)
-            ret = canonical;
-          else /* If this is a struct try and create */
-            ret = defineType(type.declaration);
-          break;
-        case Type.Unexposed:
-          /* Special case enums so we can pass them around as integer type */
-          if (type.declaration.kind === Cursor.EnumDecl) {
-            ret = mapType(type.declaration.enumType, fieldname);
-            mapEnum(type.declaration, ret);
-          } else if (type.declaration.kind === Cursor.StructDecl) {
-            ret = defineType(type.declaration);
-          }
-          break;
-        case Type.Enum:
-          ret = mapType(type.declaration.enumType, fieldname);
-          mapEnum(type.declaration, ret);
-          break;
-        case Type.Pointer:
-          if (type.pointeeType.declaration.kind == Cursor.TypedefDecl)
-            ret = defineType(type.pointeeType.declaration);
-          else {
-            ret = ffiMapType(type.pointeeType.canonical.kind);
-            if (ret) {
-              // TODO XXX FIXME template work
-              if (ret != 'ref.types.void')
-                ret = 'ref.refType('+ ret + ')';
-              else
-                ret = 'voidPtr';
-              return new WrapType(ret);
-            }
-          }
-
-          if (!ret) {
-            if (type.pointeeType.declaration.kind == Cursor.TypedefDecl && type.pointeeType.declaration.spelling) {
-              ret = defineOpaque(type.pointeeType.declaration.spelling);
-            } else {
-              ret = {
-                type: OpaqueTmpl.render({}).trim(),
-                name: OpaqueTmpl.render({}).trim(),
-              };
-            }
-          } else {
-            ret = new WrapType(ret.name + 'Ptr');
-          }
-          break;
-        case Type.ConstantArray:
-          ret = mapType(type.elementType, fieldname);
-
-          if (!ret)
-            ret = defineType(type.elementType.declaration);
-
-          ret.arrSize = type.arraySize;
-          ret.type = ArrayTmpl.render(ret).trim();
-          //console.error(fieldname, type.spelling, type.elementType.spelling, ret);
-          break;
-        case Type.Record:
-          //console.error('mapType Record');
-          ret = defineType(type.declaration);
-          break;
-        default:
-          //console.error(type.spelling);
-          ret = ffiMapType(type.kind);
-          if (ret)
-            ret = new WrapType(ret);
-          assert(type.kind != 0);
-          break;
-      }
-    }
-
-    return ret;
-  };
+		if (!name) {
+			//console.error(name, !name, type.spelling, type.usr);
+			return undefined;
+		}
 
 
-  function matchPrefix(name) {
-    var i;
+		wrap = structs[name];
 
-    if (!prefix.length) return true;
+		if (wrap) {
+			return wrap;
+		}
 
-    for (i = 0; i < prefix.length; i++)
-      if (name.indexOf(prefix[i]) == 0)
-        return true;
+		wrap = new WrapType(name);
 
-    return false;
-  }
+		var first = true;
+		type.visitChildren(function (parent) {
+			var ret, t, tname;
+			/* First item in the cursor is the one we started with?
+			 * immediately move beyond it
+			 */
+			//console.error('visiting', this.kind, this.spelling, parent.kind, parent.spelling);
 
-  /*
-   * Main source traversal -- We're mostly/only? concerned with wrapping functions
-   * we could theoretically handle types here, but handling it by dependency means
-   * we don't necessarily work through types we eventually won't care about
-   */
-  curs.visitChildren(function(parent) {
-      switch (this.kind)
-      {
-        case Cursor.FunctionDecl:
-          if (matchPrefix(this.spelling)) {
-            if (single_file && path.normalize(this.location.presumedLocation.filename) !== fname) {
-              return Cursor.Continue;
-            }
+			if (first && this.kind == Cursor.StructDecl) {
+				first = false;
+				return Cursor.Recurse;
+			}
 
-            //var result = mapType(this.resultType, this.spelling);
-            var result = defineFunction(this.spelling, this.type);
-            if (result.abort) {
-              unmapped.push(result.abort);
-              return Cursor.Continue;
-            } else {
-              toRender.functions.push(result);
-            }
-          }
-          break;
-      }
-      return Cursor.Continue;
-  });
+			if (this.kind == Cursor.UnionDecl) {
+				var un = this.type.declaration.spelling || 'union' + wrap.unionCount++;
+				//console.error('UnionDecl', un, this.kind);
+				var union = defineType(this.type.declaration, un);
+				if (union) {
+					union.kind = 'union';
+					wrap.elements.push(union);
+				} else
+					//console.error('failed to wrap union');
+					return Cursor.Continue;
+			}
+			/* TODO XXX FIXME?
+			 * If the current position of the cursor has an empty string, we're
+			 * probably still at the start of the struct/typedef
+			 */
+			if (this.spelling) {
+				/* Potentially some recursion here -- if this type depends on a type
+				 * a type we have yet to define this call should recurse until we're
+				 * in a sane state -- undefined if we can't map the type.
+				 */
+				if (this.kind == Cursor.TypeRef) {
+					t = mapType(this.referenced.type, this.referenced.spelling);
+					tname = this.referenced.spelling;
+				} else if (this.kind == Cursor.UnexposedDecl) {
+					t = mapType(this.type, this.type.spelling);
+					tname = this.type.spelling;
+				} else if (this.kind == Cursor.FieldDecl && this.type.kind == Type.Unexposed) {
+					//console.error('FieldDecl', this.type.kind, this.type.spelling);
+					t = wrap.elements[wrap.elements.length - 1];
+					/* This may not be entirely correct, we're assuming that because we
+					 * already have elements defined that we're at the name of it,
+					 * consider `union { int foo; } myUnion;` but it's also possible
+					 * we are at an actual definition and we should be defining this type
+					 *
+					 * TODO -- man I need tests.
+					 */
+					if (t) {
+						t.name = this.spelling;
+						return Cursor.Continue;
+					} else {
+						t = defineType(this.type.declaration);
+						tname = this.spelling;
+					}
+				} else {
+					t = mapType(this.type, this.spelling);
+					tname = this.spelling;
+				}
+				if (!t) {
+					/* This type has an element we don't know how to map yet, abort */
+					wrap.abort = {
+						name: tname
+					};
+					//console.error('breaking because of unmapped type', tname, this.kind);
+					ret = Cursor.Break;
+				} else {
+					/* Add the field for the struct */
+					wrap.elements.push({
+						name: tname,
+						type: t.kind === 'struct' ? t.name : t.type || t.name
+					});
+					ret = Cursor.Continue;
+				}
+			} else if (this.kind === Cursor.UnexposedDecl || this.kind === Cursor.UnexposedAttr) {
+				//console.error('unexposed decl', this.type.spelling);
+				ret = Cursor.Continue;
+			} else if (this.type.kind == Cursor.BlockExpr) {
+				//console.error('block expr');
+				ret = Cursor.Continue;
+			} else {
+				//console.error('breaking because of unknown kind', this.type.kind, this.kind);
+				wrap.abort = {
+					kind: this.type.kind
+				};
+				ret = Cursor.Break;
+			}
+			first = false;
+			return ret;
+		});
 
-  //tu.dispose();
-  idx.dispose();
+		/* types should probably contain at least one type, and don't claim to support partially defined types */
+		if (!wrap.abort && wrap.elements.length > 0) {
+			if (!unionName) {
+				wrap.type = StructTmpl.render(wrap).trim();
+				wrap.kind = 'struct';
+				toRender.types.push(wrap);
+				structs[wrap.name] = wrap;
+			} else {
+				wrap.type = UnionTmpl.render(wrap).trim();
+				wrap.kind = 'union';
+			}
+			return wrap;
+		} else {
+			//console.error(wrap);
+			return undefined;
+		}
+	};
 
-  Object.keys(enums).forEach(function (e) {
-    var ee = { name: e, values: [] };
-    Object.keys(enums[e]).forEach(function (vname) {
-      ee.values.push({
-        name: vname,
-        value: enums[e][vname],
-      });
-    });
-    toRender.enums.push(ee);
-  });
+	const mapEnum = function (type, ret) {
+		var def;
+		type.visitChildren(function (parent) {
+			var val;
 
-  return {
-    unmapped: unmapped,
-    serialized: TypeTmpl.render(toRender),
-  };
+			if (ret.name[0] === 'u') {
+				val = this.enumUValue;
+			} else {
+				val = this.enumValue;
+			}
+
+			def = enums[parent.spelling];
+			if (!def) {
+				def = enums[parent.spelling] = {};
+			}
+
+			def[this.spelling] = val;
+
+			return Cursor.Continue;
+		});
+		//console.error(def);
+	};
+
+	const defineOpaque = function (canonical) {
+		var ret = new WrapType(canonical);
+		ret.opaque = true;
+		if (!structs[ret.name]) {
+			toRender.types.push({
+				name: ret.name,
+				type: OpaqueTmpl.render(ret).trim()
+			});
+			structs[ret.name] = ret;
+		}
+		return ret;
+	};
+
+	const defineFunction = function (name, type) {
+		//console.error('defining function', name);
+
+		var ret = new WrapType(name);
+
+		var result = mapType(type.result, name);
+
+		console.log(name, result.name);
+
+		if (!result) {
+			//console.error('could not map return type', type.result.spelling);
+			ret.abort = {
+				name: name,
+				arg: type.result.spelling,
+				position: -1,
+				kind: type.declaration.spelling
+			};
+			return ret;
+		}
+
+		ret.result = result.name;
+
+		var i, arg, a, b;
+		for (i = 0; i < type.argTypes; i++) {
+			a = type.getArg(i);
+
+			console.log('Argument a:', a.kind, a.spelling);
+
+			//console.error('mapping argument', i);
+			arg = mapType(a, name + '-arg' + i);
+			if (!arg) {
+				ret.abort = {
+					name: name,
+					displayname: a.declaration.displayname,
+					arg: a.spelling,
+					position: i
+				};
+				return ret;
+			}
+			console.log(arg.name);
+			ret.args.push(arg);
+		}
+
+		return ret;
+	};
+
+	/*
+	  Turn the libclang type into ffi type
+	  TODO XXX FIXME -- Still missing array support (but node-ffi is too)
+	*/
+	const mapType = function (type, fieldname) {
+		var ret;
+		//console.error('mapType', type.spelling, type.kind);
+
+		if (type.kind === Type.Pointer && type.pointeeType.kind === Type.Char_S) {
+			ret = new WrapType(ffiMapType.CString);
+		} else {
+			switch (type.kind) {
+				case Type.Typedef:
+					/* Handle the case where someone has simply redefined an existing type */
+					var canonical = type.canonical;
+
+					if (canonical.kind == Type.Pointer && canonical.declaration.kind == Cursor.NoDeclFound &&
+						type.declaration.spelling) {
+						if (canonical.pointeeType.kind == Type.FunctionProto) {
+							ret = structs[type.declaration.spelling];
+							if (!ret) {
+								ret = defineFunction(type.declaration.spelling, canonical.pointeeType);
+								if (!ret.abort) {
+									toRender.types.push({
+										name: ret.name,
+										type: FuncPtrTmpl.render(ret).trim()
+									});
+									structs[type.declaration.spelling] = ret;
+								} else {
+									unmapped.push(ret.abort);
+									return undefined;
+								}
+							}
+							return ret;
+						} else {
+							ret = defineType(canonical.pointeeType.declaration);
+							if (ret)
+								return new WrapType(ret.name + 'Ptr');
+							else
+								return defineOpaque(type.declaration.spelling);
+						}
+					}
+					canonical = mapType(canonical, fieldname);
+
+					if (canonical)
+						ret = canonical;
+					else /* If this is a struct try and create */
+						ret = defineType(type.declaration);
+					break;
+				case Type.Unexposed:
+					/* Special case enums so we can pass them around as integer type */
+					if (type.declaration.kind === Cursor.EnumDecl) {
+						ret = mapType(type.declaration.enumType, fieldname);
+						mapEnum(type.declaration, ret);
+					} else if (type.declaration.kind === Cursor.StructDecl) {
+						ret = defineType(type.declaration);
+					}
+					break;
+				case Type.Enum:
+					ret = mapType(type.declaration.enumType, fieldname);
+					mapEnum(type.declaration, ret);
+					break;
+				case Type.Pointer:
+					if (type.pointeeType.declaration.kind == Cursor.TypedefDecl)
+						ret = defineType(type.pointeeType.declaration);
+					else {
+						ret = ffiMapType(type.pointeeType.canonical.kind);
+						if (ret) {
+							// TODO XXX FIXME template work
+							if (ret != 'ref.types.void')
+								ret = 'ref.refType(' + ret + ')';
+							else
+								ret = 'voidPtr';
+							return new WrapType(ret);
+						}
+					}
+
+					if (!ret) {
+						if (type.pointeeType.declaration.kind == Cursor.TypedefDecl && type.pointeeType.declaration.spelling) {
+							ret = defineOpaque(type.pointeeType.declaration.spelling);
+						} else {
+							ret = {
+								type: OpaqueTmpl.render({}).trim(),
+								name: OpaqueTmpl.render({}).trim()
+							};
+						}
+					} else {
+						ret = new WrapType(ret.name + 'Ptr');
+					}
+					break;
+				case Type.ConstantArray:
+					ret = mapType(type.elementType, fieldname);
+
+					if (!ret)
+						ret = defineType(type.elementType.declaration);
+
+					ret.arrSize = type.arraySize;
+					ret.type = ArrayTmpl.render(ret).trim();
+					//console.error(fieldname, type.spelling, type.elementType.spelling, ret);
+					break;
+				case Type.Record:
+					//console.error('mapType Record');
+					ret = defineType(type.declaration);
+					break;
+				default:
+					//console.error(type.spelling);
+					ret = ffiMapType(type.kind);
+					if (ret)
+						ret = new WrapType(ret);
+					assert(type.kind != 0);
+					break;
+			}
+		}
+
+		return ret;
+	};
+
+
+	function matchPrefix(name) {
+		var i;
+
+		if (!prefix.length) return true;
+
+		for (i = 0; i < prefix.length; i++)
+			if (name.indexOf(prefix[i]) == 0)
+				return true;
+
+		return false;
+	}
+
+	/*
+	 * Main source traversal -- We're mostly/only? concerned with wrapping functions
+	 * we could theoretically handle types here, but handling it by dependency means
+	 * we don't necessarily work through types we eventually won't care about
+	 */
+	curs.visitChildren(function (parent) {
+		switch (this.kind) {
+			case Cursor.FunctionDecl:
+				if (matchPrefix(this.spelling)) {
+					if (single_file && path.normalize(this.location.presumedLocation.filename) !== fname) {
+						return Cursor.Continue;
+					}
+
+					//var result = mapType(this.resultType, this.spelling);
+					const result = defineFunction(this.spelling, this.type);
+					if (result.abort) {
+						unmapped.push(result.abort);
+						return Cursor.Continue;
+					} else {
+						toRender.functions.push(result);
+					}
+				}
+				break;
+			case Cursor.StructDecl:
+				if (matchPrefix(this.spelling)) {
+					if (single_file && path.normalize(this.location.presumedLocation.filename) !== fname) {
+						return Cursor.Continue;
+					}
+
+					const canonicalType = this.canonical;
+
+					const result = mapType(canonicalType.type, canonicalType.spelling);
+					if (result.abort) {
+						unmapped.push(result.abort);
+						return Cursor.Continue;
+					}
+				}
+				break;
+		}
+		return Cursor.Continue;
+	});
+
+	//tu.dispose();
+	idx.dispose();
+
+	Object.keys(enums).forEach(function (e) {
+		var ee = {name: e, values: []};
+		Object.keys(enums[e]).forEach(function (vname) {
+			ee.values.push({
+				name: vname,
+				value: enums[e][vname]
+			});
+		});
+		toRender.enums.push(ee);
+	});
+
+	return {
+		unmapped: unmapped,
+		serialized: TypeTmpl.render(toRender)
+	};
 };
 
 var generateLibClang = function () {
-  var exec = require('child_process').exec;
+	var exec = require('child_process').exec;
 
-  exec('llvm-config --includedir', function (fail, out, err) {
-    var includedir = out.trim();
-    var result = exports.generate({
-      filename: path.join(includedir, 'clang-c', 'Index.h'),
-      includes: [includedir],
-      library: 'libclang',
-      prefix: 'clang_',
-    });
+	exec('llvm-config --includedir', function (fail, out, err) {
+		var includedir = out.trim();
+		var result = exports.generate({
+			filename: path.join(includedir, 'clang-c', 'Index.h'),
+			includes: [includedir],
+			library: 'libclang',
+			prefix: 'clang_'
+		});
 
-    if (result.unmapped.length > 0) {
-      console.log('----- UNMAPPED FUNCTIONS -----');
-      console.log(result.unmapped);
-      console.log('----- UNMAPPED FUNCTIONS -----');
-    }
+		if (result.unmapped.length > 0) {
+			console.log('----- UNMAPPED FUNCTIONS -----');
+			console.log(result.unmapped);
+			console.log('----- UNMAPPED FUNCTIONS -----');
+		}
 
-    var jsb = require('js-beautify');
-    require('fs').writeFileSync(path.join(__dirname, 'newclang.js'), jsb.js_beautify(result.serialized));
-    var dynamic_clang = require(path.join(__dirname, 'newclang'));
-    var ver = dynamic_clang.libclang.clang_getClangVersion();
-    console.log(dynamic_clang.libclang.clang_getCString(ver));
-    dynamic_clang.libclang.clang_disposeString(ver)
-  });
+		var jsb = require('js-beautify');
+		require('fs').writeFileSync(path.join(__dirname, 'newclang.js'), jsb.js_beautify(result.serialized));
+		var dynamic_clang = require(path.join(__dirname, 'newclang'));
+		var ver = dynamic_clang.libclang.clang_getClangVersion();
+		console.log(dynamic_clang.libclang.clang_getCString(ver));
+		dynamic_clang.libclang.clang_disposeString(ver)
+	});
 }
 
 if (require.main === module) {
-  generateLibClang();
+	generateLibClang();
 }
