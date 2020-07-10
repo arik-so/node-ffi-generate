@@ -27,4 +27,4 @@ typedef struct LDKBroadcasterInterface {
 } LDKBroadcasterInterface;
 
 
-//int do_something(LDKTransaction tx, LDKTestStruct *test, LDKBroadcasterInterface *bci);
+// int do_something(LDKTransaction tx, LDKTestStruct *test, LDKBroadcasterInterface *bci);

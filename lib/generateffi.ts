@@ -506,9 +506,12 @@ exports.generate = function (opts) {
 		toRender.enums.push(ee);
 	});
 
+	toRender.module = path.basename(library);
+	const serialized = TypeTmpl.render(toRender);
+
 	return {
-		unmapped: unmapped,
-		serialized: TypeTmpl.render(toRender)
+		unmapped,
+		serialized
 	};
 };
 
