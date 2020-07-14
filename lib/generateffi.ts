@@ -50,11 +50,6 @@ exports.generate = function (opts) {
 	var UnionTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, 'union.mustache'), 'utf8'));
 	var TypeTmpl = hogan.compile(fs.readFileSync(path.join(templateDir, generateType + '.mustache'), 'utf8'));
 
-	const things = Type;
-	const cursorTypes = Cursor;
-	console.dir(things);
-	console.dir(cursorTypes);
-
 	if (opts.compiler_args) {
 		compiler_args = opts.compiler_args.slice(0);
 	}
@@ -221,7 +216,7 @@ exports.generate = function (opts) {
 		});
 
 		/* types should probably contain at least one type, and don't claim to support partially defined types */
-		if (!wrap.abort && wrap.elements.length > 0) {
+		if (!wrap.abort && wrap.elements.length >= 0) {
 			if (!unionName) {
 				wrap.type = StructTmpl.render(wrap).trim();
 				wrap.kind = 'struct';
@@ -281,8 +276,6 @@ exports.generate = function (opts) {
 
 		var result = mapType(type.result, name);
 
-		console.log(name, result.name);
-
 		if (!result) {
 			//console.error('could not map return type', type.result.spelling);
 			ret.abort = {
@@ -300,8 +293,6 @@ exports.generate = function (opts) {
 		for (i = 0; i < type.argTypes; i++) {
 			a = type.getArg(i);
 
-			console.log('Argument a:', a.kind, a.spelling);
-
 			//console.error('mapping argument', i);
 			arg = mapType(a, name + '-arg' + i);
 			if (!arg) {
@@ -313,7 +304,6 @@ exports.generate = function (opts) {
 				};
 				return ret;
 			}
-			console.log(arg.name);
 			ret.args.push(arg);
 		}
 
@@ -482,9 +472,11 @@ exports.generate = function (opts) {
 					const canonicalType = this.canonical;
 
 					const result = mapType(canonicalType.type, canonicalType.spelling);
-					if (result.abort) {
+					if (result && result.abort) {
 						unmapped.push(result.abort);
 						return Cursor.Continue;
+					} else if (!result) {
+						// console.log('here');
 					}
 				}
 				break;
